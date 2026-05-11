@@ -39,6 +39,9 @@ export class HypercubeView {
     activeRotationPlane = null;
     /** «Глубинная» ось для дополнительного контроллера (scroll wheel). */
     activeDepthAxis = null;
+    /** Как интерпретировать drag по canvas: как n-D поворот или как обычный 3D orbit. */
+    canvasDragMode = 'nd';
+    projectionPreset = 'readable';
     /** Подсвечивать рёбра, параллельные оси, при работе с d_axis-слайдером. */
     highlightedDepthSliderAxis = null;
     /** Выделенные 2-грани и 3-ячейки. */
@@ -59,8 +62,9 @@ export class HypercubeView {
         this.hypercube = new Hypercube(n);
         this.ndCamera = new NDCamera(n);
         this.projection = new Projection(n);
+        this.activeDepthAxis = n > 3 ? n - 1 : null;
         // Стартовая «читаемая поза»: высшие измерения протекают в видимые.
-        this.ndCamera.setReadablePose(Math.PI / 9);
+        this.setProjectionPreset(n === 4 ? 'schlegel' : 'readable');
         // Three.js setup.
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x0a0a0c);
@@ -72,6 +76,7 @@ export class HypercubeView {
         this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
         this.controls = new OrbitControls(this.threeCamera, canvas);
         this.controls.enableDamping = true;
+        this.controls.enableRotate = false;
         // Кеш буферов под координаты в системе камеры.
         this.camFrameCoords = new Array(this.hypercube.vertexCount);
         for (let v = 0; v < this.hypercube.vertexCount; v++) {
@@ -202,6 +207,55 @@ export class HypercubeView {
             return;
         const [i, j] = this.activeRotationPlane;
         this.ndCamera.rotate(i, j, dTheta);
+    }
+    /**
+     * Вертикальный drag смешивает выбранную глубинную ось с видимой осью z.
+     * Для n=4 это дает ожидаемое "посмотреть под другим 4D углом" без ручного
+     * выбора плоскости (2, 3) в сетке.
+     */
+    rotateDepthAxis(dTheta, visibleAxis = 2) {
+        const depthAxis = this.activeDepthAxis;
+        if (depthAxis === null || this.hypercube.n < 4)
+            return;
+        if (visibleAxis < 0 || visibleAxis >= this.hypercube.n || visibleAxis === depthAxis)
+            return;
+        this.ndCamera.rotate(visibleAxis, depthAxis, dTheta);
+    }
+    applyViewportDrag(dx, dy) {
+        const scale = 0.01;
+        if (dx !== 0)
+            this.rotateActivePlane(dx * scale);
+        if (dy !== 0)
+            this.rotateDepthAxis(dy * scale);
+    }
+    setActiveDepthAxis(axis) {
+        if (axis !== null && (axis < 0 || axis >= this.hypercube.n))
+            return;
+        this.activeDepthAxis = axis;
+    }
+    setCanvasDragMode(mode) {
+        this.canvasDragMode = mode;
+        this.controls.enableRotate = mode === 'orbit';
+    }
+    resetReadablePose() {
+        this.setProjectionPreset('readable');
+    }
+    setProjectionPreset(preset) {
+        this.projectionPreset = preset;
+        this.ndCamera.setPosition(new Float64Array(this.hypercube.n));
+        if (preset === 'schlegel') {
+            this.ndCamera.resetOrientation();
+            for (let dim = 4; dim <= this.hypercube.n; dim++) {
+                this.projection.setDistance(dim, 1.55);
+            }
+            this.eventHorizonEnabled = true;
+            return;
+        }
+        this.ndCamera.setReadablePose(Math.PI / 9);
+        for (let dim = 4; dim <= this.hypercube.n; dim++) {
+            this.projection.setDistance(dim, preset === 'orthographic' ? Infinity : 5);
+        }
+        this.eventHorizonEnabled = preset !== 'orthographic';
     }
     /** Установить выделение единственной 3-ячейки (по freeMask). */
     highlightCellByFreeMask(freeMask, fixedValues) {

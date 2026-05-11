@@ -1,4 +1,8 @@
-import type { HypercubeView } from '../render/HypercubeView.js';
+import type { CanvasDragMode, HypercubeView, ProjectionPreset } from '../render/HypercubeView.js';
+
+export interface ControlsOptions {
+  onDimensionChange?: (n: number) => void;
+}
 
 /**
  * Контрольная панель.
@@ -16,15 +20,18 @@ import type { HypercubeView } from '../render/HypercubeView.js';
  */
 export class Controls {
   private readonly view: HypercubeView;
+  private readonly options: ControlsOptions;
   readonly root: HTMLDivElement;
   private orthogonalToggles: HTMLInputElement[] = [];
   private depthSliders: HTMLInputElement[] = [];
   private depthValueLabels: HTMLSpanElement[] = [];
   private planeButtons: HTMLButtonElement[][] = [];
   private diagnosticsEl: HTMLPreElement;
+  private readonly cleanupCallbacks: Array<() => void> = [];
 
-  constructor(view: HypercubeView, mountTo: HTMLElement) {
+  constructor(view: HypercubeView, mountTo: HTMLElement, options: ControlsOptions = {}) {
     this.view = view;
+    this.options = options;
     this.root = document.createElement('div');
     this.root.className = 'controls';
     mountTo.appendChild(this.root);
@@ -33,7 +40,9 @@ export class Controls {
     this.buildHeader();
     this.buildDepthStack();
     this.buildPlaneSelector();
+    this.buildViewControls();
     this.buildRotationPad();
+    this.bindCanvasDrag();
     this.buildHighlights();
     this.diagnosticsEl = this.buildDiagnostics();
   }
@@ -65,6 +74,15 @@ export class Controls {
       .controls .row input[type="range"] { flex: 1; accent-color: #c4965a; }
       .controls .row .v { flex: 0 0 56px; text-align: right; font-variant-numeric: tabular-nums; color: #e0e0e0; }
       .controls .row .ortho-toggle { flex: 0 0 16px; cursor: pointer; }
+      .controls select {
+        min-width: 0;
+        background: #161618;
+        color: #d0d0d0;
+        border: 1px solid #2a2a30;
+        font: inherit;
+        padding: 3px 6px;
+      }
+      .controls .dimension-select { flex: 1; }
       .controls .plane-grid { display: grid; gap: 1px; background: #1f1f23; padding: 1px; }
       .controls .plane-grid button {
         background: #161618;
@@ -111,8 +129,30 @@ export class Controls {
   private buildHeader(): void {
     const n = this.view.hypercube.n;
     const h = document.createElement('h1');
-    h.innerHTML = `n-cube ⟨n=<span class="accent">${n}</span>⟩`;
+    h.innerHTML = `n-cube &lt;n=<span class="accent">${n}</span>&gt;`;
     this.root.appendChild(h);
+
+    const dimensionRow = document.createElement('div');
+    dimensionRow.className = 'row';
+    const dimensionLabel = document.createElement('label');
+    dimensionLabel.textContent = 'n';
+    dimensionRow.appendChild(dimensionLabel);
+
+    const dimensionSelect = document.createElement('select');
+    dimensionSelect.className = 'dimension-select';
+    for (let dim = 3; dim <= 12; dim++) {
+      const option = document.createElement('option');
+      option.value = String(dim);
+      option.textContent = String(dim);
+      option.selected = dim === n;
+      dimensionSelect.appendChild(option);
+    }
+    dimensionSelect.addEventListener('change', () => {
+      this.options.onDimensionChange?.(Number(dimensionSelect.value));
+    });
+    dimensionRow.appendChild(dimensionSelect);
+    this.root.appendChild(dimensionRow);
+
     const sub = document.createElement('div');
     sub.style.color = '#666';
     sub.style.fontSize = '10px';
@@ -184,11 +224,34 @@ export class Controls {
 
       const valueEl = document.createElement('span');
       valueEl.className = 'v';
-      valueEl.textContent = '5.00';
+      valueEl.textContent = Number(slider.value).toFixed(2);
       this.depthValueLabels.push(valueEl);
       row.appendChild(valueEl);
 
       this.root.appendChild(row);
+    }
+    this.syncDepthControls();
+  }
+
+  private syncDepthControls(): void {
+    for (let i = 0; i < this.depthSliders.length; i++) {
+      const dim = i + 4;
+      const d = this.view.projection.getDistance(dim);
+      const slider = this.depthSliders[i];
+      const toggle = this.orthogonalToggles[i];
+      const valueEl = this.depthValueLabels[i];
+      if (Number.isFinite(d)) {
+        toggle.checked = false;
+        slider.disabled = false;
+        slider.style.opacity = '1';
+        slider.value = String(Math.min(Number(slider.max), Math.max(Number(slider.min), d)));
+        valueEl.textContent = d.toFixed(2);
+      } else {
+        toggle.checked = true;
+        slider.disabled = true;
+        slider.style.opacity = '0.4';
+        valueEl.textContent = 'âˆž';
+      }
     }
   }
 
@@ -267,6 +330,144 @@ export class Controls {
     }
   }
 
+  private buildViewControls(): void {
+    const header = document.createElement('h2');
+    header.textContent = 'View';
+    this.root.appendChild(header);
+
+    const presetRow = document.createElement('div');
+    presetRow.className = 'row';
+    const presetLabel = document.createElement('label');
+    presetLabel.textContent = 'preset';
+    presetRow.appendChild(presetLabel);
+
+    const presetSelect = document.createElement('select');
+    const presets: Array<{ value: ProjectionPreset; label: string }> = [
+      { value: 'schlegel', label: 'Schlegel' },
+      { value: 'readable', label: 'readable n-D' },
+      { value: 'orthographic', label: 'orthographic' }
+    ];
+    for (const preset of presets) {
+      const option = document.createElement('option');
+      option.value = preset.value;
+      option.textContent = preset.label;
+      option.selected = preset.value === this.view.projectionPreset;
+      presetSelect.appendChild(option);
+    }
+    presetSelect.addEventListener('change', () => {
+      this.view.setProjectionPreset(presetSelect.value as ProjectionPreset);
+      this.syncDepthControls();
+    });
+    presetRow.appendChild(presetSelect);
+    this.root.appendChild(presetRow);
+
+    const modeRow = document.createElement('div');
+    modeRow.className = 'row';
+    const modeLabel = document.createElement('label');
+    modeLabel.textContent = 'drag';
+    modeRow.appendChild(modeLabel);
+
+    const modeSelect = document.createElement('select');
+    const modes: Array<{ value: CanvasDragMode; label: string }> = [
+      { value: 'nd', label: 'n-D camera' },
+      { value: 'orbit', label: '3D orbit' }
+    ];
+    for (const mode of modes) {
+      const option = document.createElement('option');
+      option.value = mode.value;
+      option.textContent = mode.label;
+      option.selected = mode.value === this.view.canvasDragMode;
+      modeSelect.appendChild(option);
+    }
+    modeSelect.addEventListener('change', () => {
+      this.view.setCanvasDragMode(modeSelect.value as CanvasDragMode);
+    });
+    modeRow.appendChild(modeSelect);
+    this.root.appendChild(modeRow);
+
+    if (this.view.hypercube.n > 3) {
+      const axisRow = document.createElement('div');
+      axisRow.className = 'row';
+      const axisLabel = document.createElement('label');
+      axisLabel.textContent = 'depth';
+      axisRow.appendChild(axisLabel);
+
+      const axisSelect = document.createElement('select');
+      for (let axis = 3; axis < this.view.hypercube.n; axis++) {
+        const option = document.createElement('option');
+        option.value = String(axis);
+        option.textContent = String(axis);
+        option.selected = axis === this.view.activeDepthAxis;
+        axisSelect.appendChild(option);
+      }
+      axisSelect.addEventListener('change', () => {
+        this.view.setActiveDepthAxis(Number(axisSelect.value));
+      });
+      axisRow.appendChild(axisSelect);
+      this.root.appendChild(axisRow);
+    }
+
+    const resetRow = document.createElement('div');
+    resetRow.style.marginTop = '6px';
+    const resetPoseBtn = document.createElement('button');
+    resetPoseBtn.className = 'btn';
+    resetPoseBtn.textContent = 'readable pose';
+    resetPoseBtn.addEventListener('click', () => {
+      this.view.resetReadablePose();
+      this.syncDepthControls();
+      presetSelect.value = this.view.projectionPreset;
+    });
+    resetRow.appendChild(resetPoseBtn);
+    this.root.appendChild(resetRow);
+  }
+
+  private bindCanvasDrag(): void {
+    const canvas = this.view.renderer.domElement;
+    let dragging = false;
+    let pointerId = -1;
+    let lastX = 0;
+    let lastY = 0;
+
+    const stopDragging = (e: PointerEvent): void => {
+      if (!dragging || e.pointerId !== pointerId) return;
+      dragging = false;
+      if (canvas.hasPointerCapture(e.pointerId)) {
+        canvas.releasePointerCapture(e.pointerId);
+      }
+    };
+
+    const onPointerDown = (e: PointerEvent): void => {
+      if (this.view.canvasDragMode !== 'nd' || e.button !== 0) return;
+      dragging = true;
+      pointerId = e.pointerId;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    };
+
+    const onPointerMove = (e: PointerEvent): void => {
+      if (!dragging || e.pointerId !== pointerId) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      this.view.applyViewportDrag(dx, dy);
+      e.preventDefault();
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', stopDragging);
+    canvas.addEventListener('pointercancel', stopDragging);
+    this.cleanupCallbacks.push(() => {
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', stopDragging);
+      canvas.removeEventListener('pointercancel', stopDragging);
+    });
+  }
+
   private buildRotationPad(): void {
     const pad = document.createElement('div');
     pad.className = 'rotation-pad';
@@ -281,14 +482,20 @@ export class Controls {
       dragging = true;
       lastX = e.clientX;
     });
-    window.addEventListener('mousemove', (e) => {
+    const onMouseMove = (e: MouseEvent): void => {
       if (!dragging) return;
       const dx = e.clientX - lastX;
       lastX = e.clientX;
       this.view.rotateActivePlane(dx * 0.01);
-    });
-    window.addEventListener('mouseup', () => {
+    };
+    const onMouseUp = (): void => {
       dragging = false;
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    this.cleanupCallbacks.push(() => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
     });
     this.root.appendChild(pad);
   }
@@ -370,5 +577,10 @@ export class Controls {
       `vertices   ${d.vertexCount}\n` +
       `edges      ${d.edgeCount}\n` +
       `quads      ${d.activeQuads}`;
+  }
+
+  dispose(): void {
+    for (const cleanup of this.cleanupCallbacks.splice(0)) cleanup();
+    this.root.remove();
   }
 }

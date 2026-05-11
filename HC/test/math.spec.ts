@@ -3,6 +3,7 @@ import { Hypercube, popcount, subsetsOf, subsetsOfSize } from '../src/math/Hyper
 import {
   identity,
   applyGivensLeft,
+  applyGivensRight,
   applyMatrix,
   reorthogonalize,
   orthogonalityError
@@ -71,6 +72,11 @@ describe('Hypercube combinatorics', () => {
     expect(h.faces(4).length).toBe(1);  // сам куб
   });
 
+  it('faces rejects non-integer dimensions', () => {
+    const h = new Hypercube(4);
+    expect(() => h.faces(1.5)).toThrow(RangeError);
+  });
+
   it('faceVertices size = 2^k', () => {
     const h = new Hypercube(5);
     for (let k = 0; k <= 5; k++) {
@@ -134,6 +140,12 @@ describe('Givens rotations', () => {
     const M = identity(6);
     applyGivensLeft(M, 6, 1, 4, 0.7);
     expect(orthogonalityError(M, 6)).toBeLessThan(1e-14);
+  });
+
+  it('Right Givens validates its rotation plane', () => {
+    const M = identity(4);
+    expect(() => applyGivensRight(M, 4, -1, 2, 0.1)).toThrow(RangeError);
+    expect(() => applyGivensRight(M, 4, 1, 4, 0.1)).toThrow(RangeError);
   });
 
   it('Many Givens compositions stay near orthogonal; drift removable', () => {
@@ -222,11 +234,40 @@ describe('Camera', () => {
     // При identity frame frame[0] = e_0 в мировых координатах, так что position[0] = 0.5.
   });
 
+  it('moveLocal follows the rotated camera frame', () => {
+    const c = new Camera(4);
+    c.rotate(0, 1, Math.PI / 2);
+    c.moveLocal(new Float64Array([1, 0, 0, 0]));
+    expect(Math.abs(c.position[0])).toBeLessThan(1e-12);
+    expect(c.position[1]).toBeCloseTo(-1, 12);
+  });
+
   it('Reorthogonalization preserves rotation direction', () => {
     const c = new Camera(5);
     for (let k = 0; k < 300; k++) c.rotate(0, 1, 0.05);
     c.checkAndReorthogonalize();
     expect(c.orthogonalityError()).toBeLessThan(1e-10);
+  });
+
+  it('Hidden-axis camera rotation changes a tesseract projection', () => {
+    const h = new Hypercube(4);
+    const c = new Camera(4);
+    const p = new Projection(4);
+    const camCoords = new Float64Array(4);
+
+    c.transformWorldToCamera(h.coords(0), camCoords);
+    const before = p.projectVertex(camCoords).pos;
+
+    c.rotate(2, 3, Math.PI / 4);
+    c.transformWorldToCamera(h.coords(0), camCoords);
+    const after = p.projectVertex(camCoords).pos;
+
+    const delta = Math.hypot(
+      after[0] - before[0],
+      after[1] - before[1],
+      after[2] - before[2]
+    );
+    expect(delta).toBeGreaterThan(0.1);
   });
 });
 
@@ -265,6 +306,33 @@ describe('Projection', () => {
     expect(r.clipped).toBe(true);
   });
 
+  it('Projection rejects NaN distances and wrong vector dimensions', () => {
+    const p = new Projection(4);
+    expect(() => p.setDistance(4, NaN)).toThrow(RangeError);
+    expect(() => p.projectVertex(new Float64Array(3))).toThrow(RangeError);
+    expect(() => p.projectEdge(new Float64Array(4), new Float64Array(3))).toThrow(RangeError);
+
+    p.setDistance(4, Infinity);
+    expect(p.getDistance(4)).toBe(Infinity);
+  });
+
+  it('Edge projection matches endpoint projection when no clipping is needed', () => {
+    const p = new Projection(5);
+    p.setDistance(4, 5);
+    p.setDistance(5, 7);
+    const v1 = new Float64Array([1, -0.3, 0.5, 0.2, 1]);
+    const v2 = new Float64Array([-0.2, 0.4, -0.6, 0.8, -0.5]);
+    const edge = p.projectEdge(v1, v2).result!;
+    const r1 = p.projectVertex(v1);
+    const r2 = p.projectVertex(v2);
+
+    for (let i = 0; i < 3; i++) {
+      expect(edge.pos1[i]).toBeCloseTo(r1.pos[i], 12);
+      expect(edge.pos2[i]).toBeCloseTo(r2.pos[i], 12);
+    }
+    expect(edge.clippedFraction).toBe(0);
+  });
+
   it('Edge with one endpoint behind camera is clipped at singularity', () => {
     const p = new Projection(4);
     p.setDistance(4, 5);
@@ -273,6 +341,19 @@ describe('Projection', () => {
     const er = p.projectEdge(front, behind);
     expect(er.result).not.toBeNull();
     expect(er.result!.clippedFraction).toBeGreaterThan(0);
+    expect(er.result!.minMargin).toBeGreaterThan(0);
+  });
+
+  it('Edge touching the projection horizon is retained at the safe margin', () => {
+    const p = new Projection(4);
+    p.setDistance(4, 5);
+    const tangent = new Float64Array([1, 0, 0, -5 + Projection.EPSILON]);
+    const front = new Float64Array([1, 0, 0, 0]);
+    const er = p.projectEdge(tangent, front).result!;
+    expect(er).not.toBeNull();
+    expect(er.minMargin).toBeGreaterThan(0);
+    expect(Number.isFinite(er.pos1[0])).toBe(true);
+    expect(Number.isFinite(er.pos2[0])).toBe(true);
   });
 
   it('Edge with both endpoints behind camera returns null', () => {

@@ -67,6 +67,9 @@ export function applyGivensLeft(M, n, i, j, theta) {
 export function applyGivensRight(M, n, i, j, theta) {
     if (i === j)
         return;
+    if (i < 0 || i >= n || j < 0 || j >= n) {
+        throw new RangeError(`Bad rotation plane (${i}, ${j}) in dimension ${n}`);
+    }
     const c = Math.cos(theta);
     const s = Math.sin(theta);
     for (let k = 0; k < n; k++) {

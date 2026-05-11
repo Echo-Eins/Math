@@ -43,7 +43,7 @@ export class Projection {
         if (sourceDim < 4 || sourceDim > this.n) {
             throw new RangeError(`sourceDim ${sourceDim} out of range [4, ${this.n}]`);
         }
-        if (value <= 0) {
+        if (Number.isNaN(value) || value <= 0) {
             throw new RangeError(`Distance must be positive (or +Infinity), got ${value}`);
         }
         this.distances[sourceDim - 4] = value;
@@ -61,6 +61,9 @@ export class Projection {
      */
     projectVertex(v_cam) {
         const n = this.n;
+        if (v_cam.length !== n) {
+            throw new RangeError(`Expected ${n}D vector, got ${v_cam.length}D`);
+        }
         // Локальный буфер; выделение не критично — вершин обычно ≤ 1024.
         // Если станет узким местом — можно pre-allocate в конструкторе.
         const v = new Float64Array(v_cam);
@@ -118,6 +121,9 @@ export class Projection {
      */
     projectEdge(v1_cam, v2_cam) {
         const n = this.n;
+        if (v1_cam.length !== n || v2_cam.length !== n) {
+            throw new RangeError(`Expected ${n}D edge endpoints, got ${v1_cam.length}D and ${v2_cam.length}D`);
+        }
         const v1 = new Float64Array(v1_cam);
         const v2 = new Float64Array(v2_cam);
         const hidden1 = [];
@@ -135,9 +141,6 @@ export class Projection {
             if (Number.isFinite(d)) {
                 const margin1 = d + w1;
                 const margin2 = d + w2;
-                const minM = Math.min(margin1, margin2);
-                if (minM < minMargin)
-                    minMargin = minM;
                 const safe = Projection.EPSILON;
                 const behind1 = margin1 <= safe;
                 const behind2 = margin2 <= safe;
@@ -150,7 +153,8 @@ export class Projection {
                     // t = (-d + safe - w1) / (w2 - w1).
                     const target = -d + safe;
                     const t = (target - w1) / (w2 - w1);
-                    if (t > 0 && t < 1) {
+                    if (Number.isFinite(t) && t >= -Projection.EPSILON && t <= 1 + Projection.EPSILON) {
+                        const tClamped = Math.min(1, Math.max(0, t));
                         // Сдвинуть «плохой» конец в точку (1 − t из противоположной стороны).
                         const inplaceLerp = (src, dst, alpha) => {
                             for (let i = 0; i < curDim; i++) {
@@ -159,13 +163,13 @@ export class Projection {
                         };
                         if (behind1) {
                             // v1 ← v1 + t (v2 − v1)
-                            inplaceLerp(v2, v1, 1 - t);
-                            clipped1Frac = Math.max(clipped1Frac, t);
+                            inplaceLerp(v2, v1, 1 - tClamped);
+                            clipped1Frac = Math.max(clipped1Frac, tClamped);
                         }
                         else {
                             // v2 ← v1 + t (v2 − v1)
-                            inplaceLerp(v1, v2, t);
-                            clipped2Frac = Math.max(clipped2Frac, 1 - t);
+                            inplaceLerp(v1, v2, tClamped);
+                            clipped2Frac = Math.max(clipped2Frac, 1 - tClamped);
                         }
                     }
                     else {
@@ -176,6 +180,11 @@ export class Projection {
                 // Теперь обе точки впереди камеры: проецируем.
                 const m1 = d + v1[curDim - 1];
                 const m2 = d + v2[curDim - 1];
+                const minM = Math.min(m1, m2);
+                if (minM < minMargin)
+                    minMargin = minM;
+                hidden1[hidden1.length - 1] = v1[curDim - 1];
+                hidden2[hidden2.length - 1] = v2[curDim - 1];
                 const k1 = d / m1;
                 const k2 = d / m2;
                 for (let i = 0; i < curDim - 1; i++) {
@@ -192,7 +201,7 @@ export class Projection {
                 hiddenDepths1: hidden1,
                 hiddenDepths2: hidden2,
                 minMargin,
-                clippedFraction: clipped1Frac + clipped2Frac
+                clippedFraction: Math.min(1, clipped1Frac + clipped2Frac)
             }
         };
     }

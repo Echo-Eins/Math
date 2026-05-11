@@ -100,7 +100,7 @@ export class Hypercube {
    * Возвращает массив длины C(n, k) · 2^(n - k).
    */
   faces(k: number): Face[] {
-    if (k < 0 || k > this.n) {
+    if (!Number.isInteger(k) || k < 0 || k > this.n) {
       throw new RangeError(`face dimension k must be in [0, ${this.n}], got ${k}`);
     }
     const n = this.n;

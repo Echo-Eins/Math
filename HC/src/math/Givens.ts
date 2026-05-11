@@ -83,6 +83,9 @@ export function applyGivensRight(
   theta: number
 ): void {
   if (i === j) return;
+  if (i < 0 || i >= n || j < 0 || j >= n) {
+    throw new RangeError(`Bad rotation plane (${i}, ${j}) in dimension ${n}`);
+  }
   const c = Math.cos(theta);
   const s = Math.sin(theta);
   for (let k = 0; k < n; k++) {
